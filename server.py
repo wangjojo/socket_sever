@@ -1,95 +1,105 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# @Date    : 2018-06-02 01:50:27
+# @Author  : Wangjojo (wangjojo1995@gmail.com)
 import socket
-import urllib.parse
+from urllib.parse import unquote
 
-#保存用户请求
+from utils import log
+from route import route_dict
+from route import route_static,error
+
 class Request(object):
+    """
+    保存请求,需要保存的内容：method,path,query,body
+
+    """
     def __init__(self):
         self.method = 'GET'
-        self.path = ''
+        self.path = ""
         self.query = {}
         self.body = ''
-
-    #把body转化为dict形式
+    #需要将body转化为dict,body形式：a=b&c=d 和query差不多
+    #body这个时候为byte数据，需要解析
     def form(self):
-        body = urllib.parse.unquote(self.body)
+        form = {}
+        body = unquote(self.body)
         args = body.split('&')
-        f = {}
         for arg in args:
             k,v = arg.split('=')
-            f[k] = v
+            form[k] = v
+        return form
 
-        return f
-#定义一个全局变量request
-request = Request()
+#接受请求
+def request_accept(connection):
+    r = []
+    while True:
+        result = connection.recv(1024)
+        if result:
+            r.append(result)
+        r = r[0].decode('utf-8')
 
-#解析路径
-def parse_path(path):
-    if '?' in path:
-        path,query = path.split('?')
-        #分离query后，构造dict
-        query_dict = {}
-        query_list = query.split('&')
-        for each in query_list:
-            k,v = each.split('=')
-            query_dict[k] = v
-        return path,query_dict
+        return r
+        
+def parsed_request(req):
+    #请求例子: 'GET / HTTP/1.1\r\nhost\r\n\r\nbody'
+    request.method = req.split()[0]
+    #解析path和query
+    path = req.split()[1]
+    if '?' not in path:
+        request.path = path
     else:
-        return path,{}
+        query = {}
+        path,query_string = path.split('?')
+        args = query_string.split('&')
+        for arg in args:
+            k,v = arg.split('=')
+            query[k] = v
+        request.path = path
+        request.query =query
 
-def error(request, code=404):
-    """
-    根据 code 返回不同的错误响应
-    目前只有 404
-    """
-    # 之前上课我说过不要用数字来作为字典的 key
-    # 但是在 HTTP 协议中 code 都是数字似乎更方便所以打破了这个原则
-    e = {
-        404: b'HTTP/1.1 404 NOT FOUND\r\n\r\n<h1>NOT FOUND</h1>',
-    }
-    return e.get(code, b'')
+    body = req.split('\r\n\r\n',1)[1]
+    request.body = body
 
-#这里属于mvc的v
-#构造response函数
+#mvc-v
+#构造response
 def response_for_path(path):
-    #解析请求路由
-    path,query = parse_path(path)
-    request.path = path
-    request.query = query
-    #调用相应函数
-    r = {
+    url_dict = {
         '/static': route_static,
     }
-    #载入已有路由并查询
-    r.update(route_dict)
-    response = r.get(path,error)
-    
+    #加载route
+    url_dict.update(route_dict)
+    #注意啊，这里是把一个函数赋予了response
+    response = url_dict.get(path,error)
     return response(request)
 
 
-def run(host,port = 3000):
+#初始化全局request
+request = Request()
+
+def run(host='',port = 3000):
+    log('服务器启动：{}:{}'.format(host,port))
     with socket.socket() as s:
+    #s = socket.socket()
         s.bind((host,port))
         while True:
-            #开始监听
             s.listen(5)
-            #接受请求
-            #请求和用户ip
             connection,address = s.accept()
-            r = ''
-            while True:
-                result = connection.recv(1024)
-                r += result
-                if len(result) < 1024:
-                    break
-            r = r.decode('utf-8')
-            if len(r.split()) < 2:
-                continue
+            log('create connection:{}'.format(address))
+            #处理请求并暂时保存，所以需要一个全局变量request
+            #接受请求
+            r = request_accept(connection)
+            log('原始请求:{}'.format(r))
+            #解析请求
+            parsed_request(r) 
 
-            path = r.split()[1]
-            #请求路径可能还包含其他信息，要进一步处理
-            request.method = r.split()[0]
-            request.body = r.split('\r\n\r\n',1)[1]
-            response = response_for_path(path)
-
+            response = response_for_path(request.path)
             connection.sendall(response)
             connection.close()
+
+if __name__ == '__main__':
+    config ={
+        'host':'192.168.74.137',
+        'port':3002,
+    }
+    run(**config)
